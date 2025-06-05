@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="./logo.png" alt="SmartScribe Logo" width="50" style="vertical-align: middle;"/>
+  
   <span style="font-size: 2em; font-weight: bold; vertical-align: middle;">SmartScribe</span>
 </p>
 
-# SmartScribe
+<img src="./logo.png" alt="SmartScribe Logo" width="50" style="vertical-align: middle;"/># SmartScribe
 
 *SmartScribe* is an AI-powered platform designed to enhance the learning experience by transforming educational videos into interactive, accessible content. It automatically transcribes, summarizes, adds subtitles, and generates quizzes from video lectures — making it perfect for students, educators, and lifelong learners.
 
