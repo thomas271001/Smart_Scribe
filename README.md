@@ -1,4 +1,4 @@
-# ![SmartScribe Logo](./assets/logo.png)
+# ![SmartScribe Logo](./logo.png)
 
 # SmartScribe
 
