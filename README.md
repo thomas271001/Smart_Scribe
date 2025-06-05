@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="./logo.png" alt="SmartScribe Logo" width="120"/>
+  <img src="./logo.png" alt="SmartScribe Logo" width="50" style="vertical-align: middle;"/>
+  <span style="font-size: 2em; font-weight: bold; vertical-align: middle;">SmartScribe</span>
 </p>
 
 # SmartScribe
