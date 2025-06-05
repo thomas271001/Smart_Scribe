@@ -1,4 +1,4 @@
-# ![SmartScribe Logo](./logo.jpg)
+# ![SmartScribe Logo](./logo.png)
 
 # SmartScribe
 
