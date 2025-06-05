@@ -1,4 +1,6 @@
-# ![SmartScribe Logo](./logo.png)
+<p align="center">
+  <img src="./logo.png" alt="SmartScribe Logo" width="120"/>
+</p>
 
 # SmartScribe
 
