@@ -1,3 +1,4 @@
+gradio
 yt-dlp
 openai-whisper
 transformers
