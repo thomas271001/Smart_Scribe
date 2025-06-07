@@ -1,0 +1,8 @@
+yt-dlp
+openai-whisper
+transformers
+nltk
+moviepy
+scikit-learn
+torch
+torchaudio
