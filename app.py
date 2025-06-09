@@ -1,126 +1,401 @@
 import whisper
-from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.editor import VideoFileClip
 from transformers import pipeline
 import nltk
 import os
 import re
-import random
 import subprocess
-from sklearn.feature_extraction.text import TfidfVectorizer
+import torch
 from nltk.tokenize import sent_tokenize
-from nltk.corpus import stopwords
 
-# 📦 Download NLTK data (ideally run this in setup instead of here)
-nltk.download('punkt_tab')
-nltk.download('stopwords')
+# Download required NLTK data
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('maxent_ne_chunker')
+nltk.download('words')
 
-# 🔄 Global models (load once)
-whisper_model = whisper.load_model("tiny.en")  # Use 'base.en' for better accuracy if on GPU
-summarizer = pipeline("summarization", model="t5-small", device=-1)  # Use device=0 if GPU available
+# Initialize pipelines globally to avoid reloading
+print("🔄 Loading models...")
+grammar_corrector = pipeline("text2text-generation", model="vennify/t5-base-grammar-correction")
+summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 
-# 🔽 Download YouTube video
+# Step 0: Download YouTube video
 def download_youtube_video(youtube_url, filename="youtube_video.mp4"):
-    print(f"⬇️ Downloading YouTube video via yt-dlp: {youtube_url}")
+    print(f"⬇️ Downloading YouTube video: {youtube_url}")
     command = ["yt-dlp", "-f", "best[ext=mp4]+bestaudio/best", "-o", filename, youtube_url]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception("YouTube download failed: " + result.stderr)
+        raise Exception("YouTube download failed")
     return filename
 
-# 🎧 Extract audio from video
-def extract_audio(video_path):
-    clip = VideoFileClip(video_path)
-    audio_path = "temp_audio.wav"
-    clip.audio.write_audiofile(audio_path, codec='pcm_s16le')
+# Step 1: Extract audio
+def extract_audio(video_path, audio_path="temp_audio.wav"):
+    print("🎵 Extracting audio from video...")
+    video = VideoFileClip(video_path)
+    if video.audio is None:
+        raise Exception("No audio stream found")
+    video.audio.write_audiofile(audio_path, verbose=False, logger=None)
+    video.close()
     return audio_path
 
-# 📝 Transcribe audio using Whisper
+# Step 2: Transcribe audio
 def transcribe_audio(audio_path):
-    result = whisper_model.transcribe(audio_path)
-    return result["text"]
+    print("🎙️ Loading Whisper model and transcribing audio...")
+    model = whisper.load_model("base")
+    result = model.transcribe(audio_path)
+    return result
 
-# 📄 Generate summary in chunks
-def generate_summary(text, default_max_len=130, default_min_len=30):
+# Step 3: Correct transcription
+def correct_text_with_llm(text):
+    print("🧹 Correcting grammar and text...")
     sentences = sent_tokenize(text)
-    chunks = [' '.join(sentences[i:i + 10]) for i in range(0, len(sentences), 10)]
-    summary = ""
+    corrected = []
+    
+    for i, sent in enumerate(sentences):
+        print(f"Correcting sentence {i+1}/{len(sentences)}")
+        try:
+            output = grammar_corrector(sent, max_length=128, do_sample=False)[0]['generated_text']
+            corrected.append(output)
+        except Exception as e:
+            print(f"⚠️ Failed to correct sentence: {str(e)}")
+            corrected.append(sent)
+    
+    return ' '.join(corrected)
 
-    for chunk in chunks:
-        input_len = len(chunk.split())
-        dynamic_max = max(20, min(default_max_len, input_len - 1))
-        dynamic_min = max(10, min(default_min_len, dynamic_max - 10))
+# Step 4: Generate SRT subtitles
+def format_time(seconds):
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-        result = summarizer(
-            chunk,
-            max_length=dynamic_max,
-            min_length=dynamic_min,
-            do_sample=False
-        )[0]["summary_text"]
+def generate_srt(transcription_result, srt_path="subtitles.srt"):
+    print("🎬 Generating SRT subtitles...")
+    with open(srt_path, 'w', encoding='utf-8') as f:
+        for i, seg in enumerate(transcription_result['segments']):
+            f.write(f"{i+1}\n{format_time(seg['start'])} --> {format_time(seg['end'])}\n{seg['text'].strip()}\n\n")
+    return srt_path
 
-        summary += result + " "
+# Step 5: Summarize
+def summarize_text(text, max_length=150):
+    print("🔍 Generating summary...")
+    try:
+        summary = summarizer(text, max_length=max_length, min_length=40, do_sample=False)[0]['summary_text']
+        return summary
+    except Exception as e:
+        print(f"⚠️ Summarization failed: {str(e)}")
+        # Fallback to first few sentences
+        sentences = sent_tokenize(text)
+        return ' '.join(sentences[:3])
 
-    return summary.strip()
+# Step 6: Improved Quiz generation
+def clean_and_validate_question(question):
+    """
+    Clean and validate generated questions
+    """
+    if not question:
+        return None
+    
+    # Remove common prefixes
+    question = re.sub(r'^(question:|q:|generate question:|answer:)\s*', '', question, flags=re.IGNORECASE)
+    
+    # Clean up the question
+    question = question.strip()
+    
+    # Ensure it ends with a question mark
+    if not question.endswith('?'):
+        question += '?'
+    
+    # Capitalize first letter
+    if question:
+        question = question[0].upper() + question[1:]
+    
+    # Validation criteria
+    validation_checks = [
+        len(question) > 10,                                    # Minimum length
+        len(question) < 200,                                   # Maximum length
+        question.count('?') == 1,                              # Only one question mark
+        question.endswith('?'),                                # Ends with question mark
+        not question.lower().startswith(('generate', 'create', 'write', 'make')),  # Not a command
+        any(word in question.lower() for word in ['what', 'how', 'why', 'when', 'where', 'who', 'which', 'is', 'are', 'do', 'does', 'did', 'can', 'could', 'would', 'should']),  # Contains question words
+        not re.search(r'\b(example|instance|sample)\b', question.lower()),  # Not asking for examples
+        len([w for w in question.split() if w.isalpha()]) >= 4  # At least 4 actual words
+    ]
+    
+    if all(validation_checks):
+        return question
+    else:
+        return None
 
-# ❓ Generate quiz
-def generate_quiz(text, num_questions=5):
+def generate_simple_questions(text, num_needed):
+    """
+    Generate simple questions using template-based approach as fallback
+    """
     sentences = sent_tokenize(text)
-    tfidf = TfidfVectorizer(stop_words='english', max_features=300)
-    X = tfidf.fit_transform(sentences)
-    quiz = []
-    used = set()
+    questions = []
+    
+    # Simple question templates
+    templates = [
+        "What is mentioned about {}?",
+        "How does {} work?",
+        "Why is {} important?",
+        "When does {} occur?",
+        "Where can {} be found?"
+    ]
+    
+    # Extract key nouns and phrases
+    try:
+        for sent in sentences[:10]:  # Limit to first 10 sentences
+            if len(questions) >= num_needed:
+                break
+                
+            # Extract nouns using simple regex for key terms
+            words = re.findall(r'\b[A-Z][a-z]+\b', sent)  # Capitalized words
+            nouns = [word.lower() for word in words if len(word) > 3]
+            
+            for noun in nouns[:2]:  # Max 2 nouns per sentence
+                if len(questions) >= num_needed:
+                    break
+                    
+                template = templates[len(questions) % len(templates)]
+                question = template.format(noun)
+                
+                questions.append({
+                    'question': question,
+                    'source': sent,
+                    'context': sent
+                })
+                
+    except Exception as e:
+        print(f"⚠️ Error in fallback question generation: {str(e)}")
+    
+    return questions
 
-    for _ in range(num_questions):
-        i = random.choice([x for x in range(len(sentences)) if x not in used])
-        used.add(i)
-        question = sentences[i]
-        options = [question]
-
-        while len(options) < 4:
-            j = random.randint(0, len(sentences) - 1)
-            if j != i and sentences[j] not in options:
-                options.append(sentences[j])
-        random.shuffle(options)
-        quiz.append({
-            "question": question,
-            "options": options,
-            "answer": question
-        })
-
-    return "\n\n".join([
-        f"Q{i + 1}: {q['question']}\nOptions:\n" +
-        "\n".join([f"{chr(65 + j)}. {opt}" for j, opt in enumerate(q['options'])])
-        for i, q in enumerate(quiz)
-    ])
-
-# 📺 Subtitle formatting
-def generate_subtitles(text, max_words_per_line=10):
+def generate_quiz_questions(text, num_questions=5):
+    """
+    Generate quiz questions from text using improved logic and validation
+    """
+    print(f"❓ Generating {num_questions} quiz questions...")
+    
+    try:
+        # Initialize question generation pipeline
+        qg_pipeline = pipeline("text2text-generation", model="mrm8488/t5-base-finetuned-question-generation-ap")
+    except Exception as e:
+        print(f"⚠️ Failed to load primary QG model: {str(e)}")
+        print("🔄 Falling back to template-based questions...")
+        return generate_simple_questions(text, num_questions)
+    
     sentences = sent_tokenize(text)
-    subtitles = []
-    count = 1
-    for sentence in sentences:
-        chunks = [sentence[i:i + max_words_per_line] for i in range(0, len(sentence), max_words_per_line)]
-        for chunk in chunks:
-            subtitles.append(f"{count}. {chunk}")
-            count += 1
-    return "\n".join(subtitles)
+    questions = []
+    seen_questions = set()
+    
+    # Filter sentences - keep only substantial ones
+    substantial_sentences = [
+        sent.strip() for sent in sentences 
+        if len(sent.strip()) > 20 and len(sent.strip()) < 300
+    ]
+    
+    print(f"Found {len(substantial_sentences)} substantial sentences to process")
+    
+    for i, sent in enumerate(substantial_sentences):
+        if len(questions) >= num_questions:
+            break
+            
+        print(f"Processing sentence {i+1}/{min(len(substantial_sentences), num_questions*2)}")
+        
+        try:
+            # Clean the sentence
+            clean_sent = re.sub(r'[^\w\s.,!?-]', '', sent).strip()
+            
+            # Generate question using proper format for the model
+            input_text = f"context: {clean_sent} </s>"
+            
+            result = qg_pipeline(
+                input_text, 
+                max_length=64, 
+                min_length=10,
+                do_sample=True,
+                temperature=0.7,
+                num_return_sequences=1
+            )
+            
+            generated_question = result[0]['generated_text'].strip()
+            
+            # Clean and validate the question
+            question = clean_and_validate_question(generated_question)
+            
+            if question and question not in seen_questions:
+                questions.append({
+                    'question': question, 
+                    'source': sent.strip(),
+                    'context': clean_sent
+                })
+                seen_questions.add(question)
+                print(f"✅ Generated: {question}")
+            else:
+                print(f"❌ Rejected: {generated_question}")
+                
+        except Exception as e:
+            print(f"⚠️ Error generating question for sentence: {str(e)}")
+            continue
+    
+    # If we don't have enough questions, try alternative approach
+    if len(questions) < num_questions:
+        print(f"🔄 Only generated {len(questions)} questions, trying fallback approach...")
+        additional_questions = generate_simple_questions(text, num_questions - len(questions))
+        questions.extend(additional_questions)
+    
+    print(f"✅ Successfully generated {len(questions)} questions")
+    return questions[:num_questions]
 
-# 🧪 Main processor
-def process_video(video_path, selected_services):
-    results = {}
-    print("🔧 Extracting audio...")
-    audio_path = extract_audio(video_path)
+# Step 7: Notes extraction
+def extract_notes(text, max_points=7):
+    print("📒 Extracting key notes...")
+    try:
+        summary = summarize_text(text, max_length=200)
+        notes = sent_tokenize(summary)[:max_points]
+        return notes
+    except Exception as e:
+        print(f"⚠️ Note extraction failed: {str(e)}")
+        # Fallback to first few sentences
+        sentences = sent_tokenize(text)
+        return sentences[:max_points]
 
-    if "Transcription" in selected_services:
+# Main pipeline
+def process_video(video_path_or_url):
+    """
+    Main function to process video and extract all information
+    """
+    print("🚀 Starting video processing pipeline...")
+    
+    # Step 0: Handle video source
+    if video_path_or_url.startswith("http"):
+        print("🌐 Processing YouTube URL...")
+        video_path = download_youtube_video(video_path_or_url)
+    else:
+        print("📁 Processing local video file...")
+        video_path = video_path_or_url
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    try:
+        # Step 1: Extract audio
+        print("📅 Extracting audio...")
+        audio_path = extract_audio(video_path)
+
+        # Step 2: Transcribe
+        print("📝 Transcribing...")
         transcription = transcribe_audio(audio_path)
-        results["transcription"] = transcription
+        raw_text = transcription['text']
+        
+        if not raw_text.strip():
+            raise Exception("Transcription resulted in empty text")
 
-        if "Summary" in selected_services:
-            results["summary"] = generate_summary(transcription)
+        # Step 3: Correct grammar
+        print("🧹 Correcting grammar...")
+        corrected_text = correct_text_with_llm(raw_text)
 
-        if "Subtitles" in selected_services:
-            results["subtitles"] = generate_subtitles(transcription)
+        # Step 4: Generate subtitles
+        print("🎬 Generating subtitles...")
+        srt_path = generate_srt(transcription)
 
-        if "Quiz" in selected_services:
-            results["quiz"] = generate_quiz(transcription)
+        # Step 5: Summarize
+        print("🔍 Summarizing...")
+        summary = summarize_text(corrected_text)
 
-    return results
+        # Step 6: Create questions
+        print("❓ Creating questions...")
+        questions = generate_quiz_questions(corrected_text)
+
+        # Step 7: Extract notes
+        print("📒 Extracting notes...")
+        notes = extract_notes(corrected_text)
+
+        # Clean up temporary files
+        try:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+                print("🗑️ Cleaned up temporary audio file")
+        except Exception as e:
+            print(f"⚠️ Could not clean up audio file: {str(e)}")
+
+        print("✅ Video processing completed successfully!")
+        
+        return {
+            "raw_transcript": raw_text,
+            "corrected_transcript": corrected_text,
+            "srt_path": srt_path,
+            "summary": summary,
+            "questions": questions,
+            "notes": notes,
+            "video_path": video_path
+        }
+        
+    except Exception as e:
+        print(f"❌ Error in video processing: {str(e)}")
+        raise
+
+# Enhanced display function
+def display_results(output):
+    """
+    Display results in a formatted way
+    """
+    print("\n" + "="*80)
+    print("📋 VIDEO PROCESSING RESULTS")
+    print("="*80)
+    
+    print(f"\n📜 RAW TRANSCRIPTION ({len(output['raw_transcript'])} characters):")
+    print("-" * 50)
+    print(output['raw_transcript'][:500] + "..." if len(output['raw_transcript']) > 500 else output['raw_transcript'])
+    
+    print(f"\n✅ CORRECTED TRANSCRIPTION ({len(output['corrected_transcript'])} characters):")
+    print("-" * 50)
+    print(output['corrected_transcript'][:500] + "..." if len(output['corrected_transcript']) > 500 else output['corrected_transcript'])
+    
+    print(f"\n🔍 SUMMARY:")
+    print("-" * 50)
+    print(output['summary'])
+    
+    if output['questions']:
+        print(f"\n❓ QUIZ QUESTIONS ({len(output['questions'])} questions):")
+        print("-" * 50)
+        for i, q in enumerate(output['questions'], 1):
+            if isinstance(q, dict):
+                print(f"Q{i}: {q['question']}")
+            else:
+                print(f"Q{i}: {q}")
+    else:
+        print("\n❌ No questions generated.")
+    
+    print(f"\n📌 KEY NOTES ({len(output['notes'])} points):")
+    print("-" * 50)
+    for i, note in enumerate(output['notes'], 1):
+        print(f"{i}. {note}")
+    
+    print(f"\n🎬 FILES GENERATED:")
+    print("-" * 50)
+    print(f"• Subtitles: {output['srt_path']}")
+    if 'video_path' in output:
+        print(f"• Video: {output['video_path']}")
+    
+    print("\n" + "="*80)
+
+# Example usage and main execution
+if __name__ == "__main__":
+    # Example usage - modify this path/URL as needed
+    input_source = "/content/videoplayback.mp4"  # Change this to your video path or YouTube URL
+    
+    try:
+        print("🎬 Starting video processing...")
+        output = process_video(input_source)
+        display_results(output)
+        print("🎉 Processing completed successfully!")
+        
+    except FileNotFoundError as e:
+        print(f"❌ File not found: {str(e)}")
+        print("💡 Please check the video path or URL")
+        
+    except Exception as e:
+        print(f"❌ Processing failed: {str(e)}")
+        print("💡 Please check your video file and try again")
