@@ -42,7 +42,7 @@
 ## 📦 Installation
 
 bash
-git clone https://github.com/your-username/smartscribe.git
+git clone https://github.com/thomas27100/Smart_Scribe
 cd smartscribe
 npm install
 npm run dev
@@ -54,8 +54,6 @@ npm run dev
 
 For inquiries, feedback, or collaboration opportunities, please reach out to us:
 
-- 📧 *Email*: [contact@smartscribe.ai](mailto:contact@smartscribe.ai)  
-- 🌐 *Website*: [www.smartscribe.ai](https://www.smartscribe.ai)  
-- 📱 *Instagram*: [@smartscribe.ai](https://instagram.com/smartscribe.ai)
+- 🌐 *Website*: [https://thomasanto7001-smartscribe.hf.space](https://thomasanto7001-smartscribe.hf.space)  
 
 ---
