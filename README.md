@@ -31,11 +31,9 @@
 
 ## 🛠 Tech Stack
 
-- *Frontend*: React / Next.js / Tailwind CSS  
-- *Backend*: Node.js / Express / Python (AI Services)  
-- *AI Services*: OpenAI / Whisper / Transformers  
-- *Storage*: Firebase / AWS S3  
-- *Database*: MongoDB / PostgreSQL
+- *Frontend*: Gradio
+- *Backend*: Python / whisper / moviepy / transformers / nltk / scikit-learn / yt-dlp 
+- *Deployment*: Hugging Face Spaces
 
 ---
 
